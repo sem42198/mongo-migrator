@@ -1,5 +1,5 @@
 import pymysql.cursors
-from schema import *
+from schema_graph import *
 
 host = 'localhost'
 db = 'test'
@@ -12,10 +12,8 @@ connection = pymysql.connect(host=host,
                              db=db,
                              cursorclass=pymysql.cursors.DictCursor)
 
-schema = Schema(connection)
-tbl = Table('dogs', 'name')
-tbl.add_one_to_many_child('toys', 'id', 'dog')
-schema.add_table(tbl)
+graph = Graph(connection, db)
+schema = graph.make_schema()
 try:
 	schema.map()
 finally:

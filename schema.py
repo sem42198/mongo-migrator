@@ -18,7 +18,9 @@ class Table:
         self.children = {}
 
     def add_one_to_many_child(self, child_table, child_key, fk_column):
-        self.children[child_table] = OneToManyChild(child_table, child_key, fk_column)
+        child = OneToManyChild(child_table, child_key, fk_column)
+        self.children[child_table] = child
+        return child
 
     def map(self, connection):
         with connection.cursor() as cursor:
