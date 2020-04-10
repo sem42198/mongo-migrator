@@ -1,0 +1,52 @@
+top_5 = []
+
+function find_schemas(fk_graph, loss_factors = {}, duplication_factors = {}, refs = {}) {
+
+	for edge in fk_graph {
+
+		if edge is dotted edge {
+			find_schemas(fk_graph - edge, loss_factors, duplication_factors)
+			find_schemas(fk_graph - edge + edge.make_full, loss_factors + {edge.refrencing_table.count(where edge.fk_column is null)}, duplication_factors)
+
+			return
+		}
+
+	}
+
+	cycle = fk_graph.get_cycle()
+
+	if cycle != null {
+
+		for edge in cycle {
+			find_schemas(fk_graph - edge, loss_factors, duplication_factors)
+		}
+
+		return
+
+	}
+
+	for node in fk_graph {
+
+		if node.parents.length > 1 {
+			// duplicate node
+			find_schemas(fk_graph + node.duplicates, loss_factors, duplication_factors + {node.referencer.size for parent in node.parents}, refs)
+
+			// make node base and add refs
+			find_schemas(fk_graph - node.parents.edges, loss_factors, duplication_factors, refs + [parent refs child via child.fk for parent in node.parents])
+
+			// choose one parent to be parent and the rest become children
+			for parent in node.parents {
+				other_parents = node.parents - parent
+				find_schemas(fk_graph - other_parents.edges + other_parents.edges.reverse, loss_factors + {node.fk.distinct_values / parent.rows for parent in other_parents}, duplication_factors = {node.rows / parent.rows for parent in other_parents})
+			}
+
+			return
+		}
+
+	}
+
+	if hueristic(fk_graph > min(top_5)) {
+		min(top_5).replace_with(fk_graph)
+	}
+
+}

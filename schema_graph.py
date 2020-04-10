@@ -1,4 +1,5 @@
 from schema import *
+import copy
 
 duplication_weight = 1
 data_loss_weight = 10
@@ -44,18 +45,21 @@ class Graph:
 				for result in cursor.fetchall():
 					cursor.execute(DISTINCT_FK_COUNT_SQL % (result['COLUMN_NAME'], table))
 					distinct_vals = cursor.fetchone()['DISTINCT_VALS']
-					node.add_fkey(result['COLUMN_NAME'], result['REFERENCED_TABLE_NAME'], distinct_vals)
+					refed_table = self.nodes[result['REFERENCED_TABLE_NAME']]
+					node.add_fkey(result['COLUMN_NAME'], refed_table, distinct_vals)
 
 
-
+	def treeify_options(self):
+		opts = [self.copy()]
+		return [opt.make_schema() for opt in opts]
 
 	def copy(self):
-		cp = Graph(self.connection)
+		cp = Graph(self.connection, self.db_name)
 		cp.nodes = copy.deepcopy(self.nodes)
 		return cp
 
 	def make_schema(self):
-		schema = Schema(self.connection)
+		schema = Schema(self)
 		for node in self.root_nodes():
 			schema.add_table(node.make_table())
 		return schema
@@ -68,7 +72,7 @@ class Graph:
 		return roots
 
 	def __str__(self):
-		s = 'Schema:\n'
+		s = ''
 		for node in self.nodes.values():
 			s += str(node) + '\n'
 		return s
@@ -86,12 +90,10 @@ class Node:
 		self.num_rows = num_rows
 		self.child_edges = set()
 		self.parent_edges = set()
-		self.graph = graph
 		graph.nodes[self.name] = self
 
 	def add_fkey(self, fk_col, referenced_table, distinct_fk_count):
-		from_node = self.graph.nodes[referenced_table]
-		Edge(from_node, self, fk_col, self.name, distinct_fk_count)
+		Edge(referenced_table, self, fk_col, self.name, distinct_fk_count)
 
 	def make_table(self):
 		table = Table(self.name, self.pk)
