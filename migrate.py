@@ -11,7 +11,7 @@ def migrate():
 	mongodb_host = 'localhost'
 	mongodb_port = 27017
 
-	db_name = 'world'
+	db_name = 'employees'
 
 	mysql_connection = pymysql.connect(host=mysql_host,
 	                             port=mysql_port,
@@ -23,7 +23,7 @@ def migrate():
 	mongo_client = pymongo.MongoClient(mongodb_host, mongodb_port)
 
 	graph = Graph(mysql_connection, db_name)
-	opts = graph.treeify_options()
+	opts = graph.get_opts()
 
 	view_schemas(0, 5, opts)
 
@@ -43,9 +43,10 @@ def view_schemas(start, end, opts):
 		print(opt)
 
 	while input('Would you like to preview a schema? (y/n)').lower() == 'y':
-		schema = opts[int(input('Which shema would you like to preview?')) - 1]
+		schema = opts[int(input('Which schema would you like to preview?')) - 1]
+		num_records = int(input('How many records would you like to preview?'))
 		filename = input('Enter name of preview file:')
-		schema.preview(filename)
+		schema.preview(filename, num_records)
 
 	if end < len(opts) and input('Would you like to view more schema options? (y/n)').lower() == 'y':
 		view_schemas(end, end + 5, opts)
