@@ -1,10 +1,10 @@
 from schema import *
+from statistics import mean
 import copy
 
-duplication_cost = 1
-data_loss_cost = 50
-reference_cost = 20
-root_node_cost = 20
+data_storage_cost = 0
+data_loss_cost = 10
+ref_cost = 2
 
 TABLES_LIST_SQL = "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_TYPE != 'VIEW';"
 
@@ -24,14 +24,18 @@ NULL_FK_COUNT = "SELECT COUNT(*) AS NULL_COUNT FROM %s WHERE %s IS NULL;"
 
 class Graph:
 
-    def __init__(self, connection, db_name, current_id=0):
+    def __init__(self, connection, db_name, current_id=0, steps=[]):
         self.db_name = db_name
         self.connection = connection
         self.nodes = {}
         self.edges = {}
         self.current_id = current_id
+        self.steps = steps
         if current_id == 0:
             self.init_tables()
+
+    def add_step(self, step):
+        self.steps = self.steps + [step]
         
 
     def init_tables(self):
@@ -62,56 +66,82 @@ class Graph:
                     node.add_fkey(self, result['COLUMN_NAME'], refed_table, distinct_vals, null_fk_count)
 
 
-    def generate(self, graphs, steps):
+    def generate(self, graphs):
         multiparent_node = self.get_multi_parent_node()
         if multiparent_node != None:
 
-            # Try duplicating the node
-            copy = self.copy_graph()
-            copy.nodes[multiparent_node.id].duplicate(copy)
-            graphs.append([copy, steps + ['Duplicated Node: %s' % multiparent_node.name]])
-            # copy.treeify_options(tree_opts, steps + ['Duplicated Node: %s' % multiparent_node.name])
+            if not multiparent_node.dont_dup:
+                copy = self.copy_graph()
+                copy.nodes[multiparent_node.id].duplicate(copy)
+                graphs.append(copy)
 
-            # Try reversing an edge
-            for edge in multiparent_node.parent_edges:
-                if not edge.reversed:
-                    copy = self.copy_graph()
-                    copy.edges[edge.id].reverse()
-                    graphs.append([copy, steps + ['Reversed Edge: %s' % copy.edges[edge.id]]])
+            problem_edges = multiparent_node.parent_edges
+
         else:
-            cycle = self.get_cycle()
-            for edge in cycle:
-                if not edge.reversed:
-                    copy = self.copy_graph()
-                    copy.edges[edge.id].reverse()
-                    graphs.append([copy, steps + ['Reversed Edge: %s' % copy.edges[edge.id]]])
-            # print('Found cycle:')
-            # print(cycle)
+            problem_edges = self.get_cycle()
+
+        # Try reversing an edge
+        for edge in problem_edges:
+            if not edge.reversed:
+                copy = self.copy_graph()
+                copy.edges[edge.id].reverse(copy)
+                graphs.append(copy)
+
+        # Try making an edge a ref edge
+        for edge in problem_edges:
+            if not edge.reference:
+                copy = self.copy_graph()
+                copy.edges[edge.id].make_ref(copy)
+                graphs.append(copy)
 
 
 
     def get_opts(self):
+        for node in self.nodes.values():
+            if len(node.parent_edges) > 1:
+                node.dont_dup = True
+        for edge in self.edges.values():
+            if edge.from_node == edge.to_node:
+                edge.make_ref(self)
         tree_opts = []
-        graphs = [[self, []]]
+        graphs = [self]
         num_edges = len(self.edges)
         while not len(graphs) == 0:
-            curr, steps = graphs.pop()
+            curr = graphs.pop()
             if curr.is_valid():
-                tree_opts.append([curr, steps])
-            elif len(steps) < num_edges * (2/3):
-                curr.generate(graphs, steps)
-        index = [[tree_opts[i][0].heuristic(), i] for i in range(len(tree_opts))]
+                tree_opts.append(curr)
+            elif len(curr.steps) < num_edges * (2/3):
+                curr.generate(graphs)
+        for opt in tree_opts:
+            opt.handle_lossy_edges(tree_opts)
+        for opt in tree_opts:
+            for root in opt.root_nodes():
+                root.adjust_child_size()
+        Graph.scale_opt_scores(tree_opts)
+        index = [[tree_opts[i].score, i] for i in range(len(tree_opts))]
         index.sort()
-        # for ind in index:
-        #     print(ind[0])
-        #     steps = tree_opts[ind[1]][1]
-        #     print(', '.join([node.name for node in tree_opts[ind[1]][0].root_nodes()]))
-        #     print('%s\n====================' % '\n'.join(steps))
         # return []
-        return [tree_opts[ind[1]][0].make_schema() for ind in index]
+        return [tree_opts[i].make_schema() for _h, i in index]
+
+    def handle_lossy_edges(self, tree_opts):
+        for root in self.root_nodes():
+            for edge in root.child_edges:
+                if self.data_loss_cost(edge.to_node.name) != 0:
+                    copy = self.copy_graph()
+                    copy.edges[edge.id].make_ref(copy)
+                    tree_opts.append(copy)
+                    copy.handle_lossy_edges(tree_opts)
+
+                    # now reverse the ref edge
+                    copy = copy.copy_graph()
+                    copy.edges[edge.id].reverse(copy)
+                    tree_opts.append(copy)
+                    copy.handle_lossy_edges(tree_opts)
+
+
 
     def copy_graph(self):
-        cp = Graph(self.connection, self.db_name, current_id=self.current_id)
+        cp = Graph(self.connection, self.db_name, current_id=self.current_id, steps=self.steps)
         for node in self.nodes.values():
             node.copy_node(cp)
         for edge in self.edges.values():
@@ -138,28 +168,45 @@ class Graph:
                     roots.add(node)
         return roots
 
-    def data_loss_cost(self):
-        data_loss = {}
-        for edge in self.edges.values():
-            loss = 0
-            if not edge.reference:
-                if edge.reversed:
-                    loss = (data_loss_cost * edge.to_node.rowsize * 
-                        max(edge.to_node.num_rows - edge.distinct_fk_count, 0))
-                else:
-                    loss = data_loss_cost * edge.null_fk_count * edge.to_node.rowsize
-            if not edge.to_node.name in data_loss or loss < data_loss[edge.to_node.name]:
-                data_loss[edge.to_node.name] = loss
-        return sum(data_loss.values())
+    def data_loss_cost(self, table=None):
+        total_size = {}
+        orig_size = {}
+        for node in self.nodes.values():
+            orig_size[node.name] = node.orig_num_rows * node.rowsize
+            total_size[node.name] = total_size.get(node.name, 0) + node.data_size()
 
-    def root_node_cost(self):
-        return root_node_cost * sum([node.rowsize * node.num_rows for node in self.nodes.values()])
+        if table:
+            return max(0, orig_size[table] - total_size[table])
+        else:
+            return sum([max(0, orig_size[table] - total_size[table]) for table in total_size.keys()])
 
-    def heuristic(self):
-        total = self.data_loss_cost() + self.root_node_cost()
+    def data_storage_cost(self):
+        return sum([node.data_size() for node in self.nodes.values()])
+
+    def ref_cost(self):
+        num_refs = 0
         for edge in self.edges.values():
-            total += edge.duplication_and_ref_cost()
-        return total
+            if edge.reference:
+                num_refs += 1
+        return num_refs
+
+    def scale_opt_scores(schema_opts):
+        data_loss = []
+        data_storage = []
+        refs = []
+        for graph in schema_opts:
+            data_loss.append(graph.data_loss_cost())
+            data_storage.append(graph.data_storage_cost())
+            refs.append(graph.ref_cost())
+        average_data_loss = max(mean(data_loss), 1e-9)
+        average_data_storage = max(mean(data_storage), 1e-9)
+        average_refs = max(mean(refs), 1e-9)
+        for i in range(len(schema_opts)):
+            graph = schema_opts[i]
+            graph.scaled_data_loss = data_loss_cost * data_loss[i] / average_data_loss
+            graph.scaled_data_storage = data_storage_cost * data_storage[i] / average_data_storage
+            graph.scaled_refs = ref_cost * refs[i] / average_refs
+            graph.score = graph.scaled_data_loss + graph.scaled_data_storage + graph.scaled_refs
 
     def get_cycle(self):
         tested = set()
@@ -188,10 +235,16 @@ class Graph:
 
 
     def __str__(self):
-        s = ''
-        for node in self.nodes.values():
-            s += "%s\n" % node
-        return s
+        # print('Data storage: %f' % self.scaled_data_storage)
+        # print('Data loss: %f' % self.scaled_data_loss)
+        # for node in self.nodes.values():
+        #     print(node.name)
+        #     print('Orig rows: %d' % node.orig_num_rows)
+        #     print('Num rows: %d' % node.num_rows)
+        # print('Refs: %f' % self.scaled_refs)
+        # print('Total: %f' % self.scaled_refs)
+        return "\n".join(['------------------------------'] +
+            [str(node) for node in self.nodes.values()] + ['=============================='])
 
     __repr__ = __str__
 
@@ -201,12 +254,15 @@ class Graph:
 
 class Node:
 
-    def __init__(self, graph, table, pk, rowsize, num_rows, node_id=None):
+    def __init__(self, graph, table, pk, rowsize, num_rows, node_id=None, dont_dup=False):
         self.id = (node_id or graph.get_next_id())
         self.name = table
         self.pk = pk
         self.rowsize = rowsize
         self.num_rows = num_rows
+        self.orig_num_rows = num_rows
+        self.distinct_rows = num_rows
+        self.dont_dup = dont_dup
         self.child_edges = set()
         self.parent_edges = set()
         graph.nodes[self.id] = self
@@ -222,7 +278,9 @@ class Node:
     def _embed_children(self, table):
         for edge in self.child_edges:
             node = edge.to_node
-            if edge.reversed:
+            if edge.reference:
+                return
+            elif edge.reversed:
                 child = table.add_many_to_one_child(node.name, node.pk, edge.fkey_col)
             else:
                 child = table.add_one_to_many_child(node.name, node.pk, edge.fkey_col)
@@ -231,8 +289,28 @@ class Node:
     def data_size(self):
         return self.rowsize * self.num_rows
 
+    def adjust_child_size(self):
+        for edge in self.child_edges:
+            if edge.reference:
+                continue
+            elif edge.reversed:
+                edge.to_node.num_rows = self.num_rows - edge.null_fk_count
+            else:
+                edge.to_node.num_rows = (self.num_rows / self.orig_num_rows) * (edge.to_node.num_rows - edge.null_fk_count)
+            edge.to_node.adjust_child_size()
+
+
     def __str__(self):
-        children = ', '.join([edge.to_node.name for edge in self.child_edges])
+        edges = []
+        for edge in self.child_edges:
+            name = edge.to_node.name
+            if edge.reference:
+                edges.append("(%s)" % name)
+            elif edge.reversed:
+                edges.append(name)
+            else:
+                edges.append("[%s]" % name)
+        children = ', '.join(edges)
         return "%s -> {%s}" % (self.name, children)
 
     __repr__ = __str__
@@ -251,6 +329,7 @@ class Node:
             return None
 
     def duplicate(self, graph):
+        # print('Duplicating %s' % self)
         graph.nodes.pop(self.id)
         for edge in self.child_edges:
             graph.edges.pop(edge.id)
@@ -264,9 +343,10 @@ class Node:
                     edge.null_fk_count)
                 edge_copy.reversed = edge.reversed
                 edge_copy.reference = edge.reference
+        graph.add_step("Duplicated node: %s" % self.name)
 
     def copy_node(self, graph):
-        Node(graph, self.name, self.pk, self.rowsize, self.num_rows, node_id=self.id)
+        Node(graph, self.name, self.pk, self.rowsize, self.num_rows, node_id=self.id, dont_dup=self.dont_dup)
 
 
 
@@ -296,7 +376,7 @@ class Edge:
 
     __repr__ = __str__
 
-    def reverse(self):
+    def reverse(self, graph):
         self.reversed = not self.reversed
         self.from_node.child_edges.remove(self)
         self.from_node.parent_edges.add(self)
@@ -305,25 +385,11 @@ class Edge:
         new_to_node = self.from_node
         self.from_node = self.to_node
         self.to_node = new_to_node
+        graph.add_step("Reversed edge: %s" % self)
 
-    def make_ref(self):
+    def make_ref(self, graph):
         self.reference = True
-
-    def reverse_and_make_ref(self):
-        self.reverse()
-        self.make_ref()
-
-    # lower is better
-    def duplication_and_ref_cost(self):
-        total = 0
-        if self.reference:
-            total += reference_cost * self.to_node.data_size()
-        elif self.reversed:
-            total += (duplication_cost * self.to_node.rowsize * 
-                max(self.from_node.num_rows - self.null_fk_count - self.to_node.num_rows, 0))
-        else:
-            total += duplication_cost * self.to_node.data_size()
-        return total
+        graph.add_step("Converted edge to ref: %s" % self)
 
     def copy_edge(self, graph):
         from_node = graph.nodes[self.from_node.id]

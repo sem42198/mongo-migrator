@@ -11,7 +11,7 @@ def migrate():
 	mongodb_host = 'localhost'
 	mongodb_port = 27017
 
-	db_name = 'employees'
+	db_name = 'world'
 
 	mysql_connection = pymysql.connect(host=mysql_host,
 	                             port=mysql_port,
@@ -28,8 +28,8 @@ def migrate():
 	view_schemas(0, 5, opts)
 
 
-	if input('Would you like to migrate to MongoDB? (y/n)').lower() == 'y':
-		schema = opts[int(input('Which schema would you like to use?')) - 1]
+	if input('Would you like to migrate to MongoDB? (y/n) ').lower() == 'y':
+		schema = opts[int(input('Which schema would you like to use? ')) - 1]
 		try:
 			schema.map(mongo_client)
 		finally:
@@ -42,13 +42,13 @@ def view_schemas(start, end, opts):
 		print('%d)' % (i + 1))
 		print(opt)
 
-	while input('Would you like to preview a schema? (y/n)').lower() == 'y':
-		schema = opts[int(input('Which schema would you like to preview?')) - 1]
-		num_records = int(input('How many records would you like to preview?'))
-		filename = input('Enter name of preview file:')
-		schema.preview(filename, num_records)
+	if end < len(opts) and input('Would you like to view more schema options? (y/n) ').lower() == 'y':
+		return view_schemas(end, end + 5, opts)
 
-	if end < len(opts) and input('Would you like to view more schema options? (y/n)').lower() == 'y':
-		view_schemas(end, end + 5, opts)
+	while input('Would you like to preview a schema? (y/n) ').lower() == 'y':
+		schema = opts[int(input('Which schema would you like to preview? ')) - 1]
+		num_records = int(input('How many records would you like to preview? '))
+		filename = input('Enter name of preview file: ')
+		schema.preview(filename, num_records)
 
 migrate()
