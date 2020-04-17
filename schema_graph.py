@@ -78,7 +78,7 @@ class Graph:
             problem_edges = multiparent_node.parent_edges
 
         else:
-            problem_edges = self.get_cycle()
+            problem_edges = self.get_cycle() or []
 
         # Try reversing an edge
         for edge in problem_edges:
@@ -97,12 +97,18 @@ class Graph:
 
 
     def get_opts(self):
-        for node in self.nodes.values():
-            if len(node.parent_edges) > 1:
-                node.dont_dup = True
+        # make any table with a fk pointing to itself a ref since there is no other option
         for edge in self.edges.values():
             if edge.from_node == edge.to_node:
                 edge.make_ref(self)
+
+        for node in self.nodes.values():
+            if len(node.parent_edges) > 1:
+                node.dont_dup = True
+            if not node.in_undirected_cycle():
+                # only allow duplication if node is part of a cycle were the graph undirected
+                node.dont_dup = True
+        
         tree_opts = []
         graphs = [self]
         num_edges = len(self.edges)
@@ -120,7 +126,6 @@ class Graph:
         Graph.scale_opt_scores(tree_opts)
         index = [[tree_opts[i].score, i] for i in range(len(tree_opts))]
         index.sort()
-        # return []
         return [tree_opts[i].make_schema() for _h, i in index]
 
     def handle_lossy_edges(self, tree_opts):
@@ -129,14 +134,16 @@ class Graph:
                 if self.data_loss_cost(edge.to_node.name) != 0:
                     copy = self.copy_graph()
                     copy.edges[edge.id].make_ref(copy)
-                    tree_opts.append(copy)
-                    copy.handle_lossy_edges(tree_opts)
+                    if copy.is_valid():
+                        tree_opts.append(copy)
+                        copy.handle_lossy_edges(tree_opts)
 
                     # now reverse the ref edge
                     copy = copy.copy_graph()
                     copy.edges[edge.id].reverse(copy)
-                    tree_opts.append(copy)
-                    copy.handle_lossy_edges(tree_opts)
+                    if copy.is_valid():
+                        tree_opts.append(copy)
+                        copy.handle_lossy_edges(tree_opts)
 
 
 
@@ -228,8 +235,15 @@ class Graph:
                         return node
         return None
 
+    def refs_valid(self):
+        # having multiple refs to a node can create to same problem as duplicating it
+        for node in self.nodes.values():
+            if node.dont_dup and len(node.parent_edges) > 1:
+                return False
+        return True
+
     def is_valid(self):
-        return self.get_cycle() == None and self.get_multi_parent_node() == None
+        return self.get_cycle() == None and self.get_multi_parent_node() == None and self.refs_valid()
 
     def get_next_id(self):
         self.current_id += 1
@@ -311,7 +325,8 @@ class Node:
             elif edge.reversed:
                 edge.to_node.num_rows = self.num_rows - edge.null_fk_count
             else:
-                edge.to_node.num_rows = (self.num_rows / self.orig_num_rows) * (edge.to_node.num_rows - edge.null_fk_count)
+                edge.to_node.num_rows = ((self.num_rows / self.orig_num_rows) * 
+                    (edge.to_node.num_rows - edge.null_fk_count))
             edge.to_node.adjust_child_size()
 
 
@@ -343,8 +358,34 @@ class Node:
                         return cycle
             return None
 
+    def in_undirected_cycle(self):
+        return self.undirected_search_for(self, [], set())
+
+    def undirected_search_for(self, search_for, used_edges, visited_nodes):
+        visited_nodes.add(self)
+
+        for edge in self.child_edges:
+            if edge.reference or edge in used_edges :
+                continue
+            else:
+                if edge.to_node == search_for:
+                    return True
+                elif not edge.to_node in visited_nodes:
+                    if edge.to_node.undirected_search_for(search_for, used_edges + [edge], visited_nodes):
+                        return True
+        for edge in self.parent_edges:
+            if edge.reference or edge in used_edges :
+                continue
+            else:
+                if edge.from_node == search_for:
+                    return True
+                elif not edge.from_node in visited_nodes:
+                    if edge.from_node.undirected_search_for(search_for, used_edges + [edge], visited_nodes):
+                        return True
+        return False
+
+
     def duplicate(self, graph):
-        # print('Duplicating %s' % self)
         graph.nodes.pop(self.id)
         for edge in self.child_edges:
             graph.edges.pop(edge.id)
