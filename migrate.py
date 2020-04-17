@@ -11,7 +11,7 @@ def migrate():
 	mongodb_host = 'localhost'
 	mongodb_port = 27017
 
-	db_name = 'world'
+	db_name = 'classicmodels'
 
 	mysql_connection = pymysql.connect(host=mysql_host,
 	                             port=mysql_port,

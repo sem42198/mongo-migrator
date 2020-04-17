@@ -2,9 +2,9 @@ from schema import *
 from statistics import mean
 import copy
 
-data_storage_cost = 0
+data_storage_cost = 1
 data_loss_cost = 10
-ref_cost = 2
+ref_cost = 5
 
 TABLES_LIST_SQL = "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_TYPE != 'VIEW';"
 
@@ -152,6 +152,8 @@ class Graph:
         schema = Schema(self)
         for node in self.root_nodes():
             schema.add_table(node.make_table())
+        for node in self.nodes.values():
+            node.add_refs(schema)
         return schema
 
     def root_nodes(self):
@@ -265,12 +267,14 @@ class Node:
         self.dont_dup = dont_dup
         self.child_edges = set()
         self.parent_edges = set()
+        self.path = []
         graph.nodes[self.id] = self
 
     def add_fkey(self, graph, fk_col, referenced_table, distinct_fk_count, null_fk_count):
         Edge(graph, referenced_table, self, fk_col, self.name, distinct_fk_count, null_fk_count)
 
     def make_table(self):
+        self.path = [self.name]
         table = Table(self.name, self.pk)
         self._embed_children(table)
         return table
@@ -279,12 +283,23 @@ class Node:
         for edge in self.child_edges:
             node = edge.to_node
             if edge.reference:
-                return
+                continue
             elif edge.reversed:
-                child = table.add_many_to_one_child(node.name, node.pk, edge.fkey_col)
+                child, label = table.add_many_to_one_child(node.name, node.pk, edge.fkey_col)
             else:
-                child = table.add_one_to_many_child(node.name, node.pk, edge.fkey_col)
+                child, label = table.add_one_to_many_child(node.name, node.pk, edge.fkey_col)
+            node.path = self.path + [label]
             node._embed_children(child)
+
+    def add_refs(self, schema):
+        for edge in self.child_edges:
+            if edge.reference:
+                if edge.reversed:
+                    schema.add_many_to_one_ref(edge.to_node.name, edge.to_node.pk, edge.from_node.path, 
+                        edge.from_node.pk, edge.fkey_col)
+                else:
+                    schema.add_one_to_many_ref(edge.to_node.name, edge.to_node.pk, edge.from_node.path, 
+                        edge.from_node.pk, edge.fkey_col)
 
     def data_size(self):
         return self.rowsize * self.num_rows
