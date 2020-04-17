@@ -104,7 +104,14 @@ class Graph:
 
         for node in self.nodes.values():
             if len(node.parent_edges) > 1:
-                node.dont_dup = True
+                # we make an exception for when it has a recursive edge but otherwise don't duplicate it
+                nonref = False
+                for edge in node.parent_edges:
+                    if not edge.reference:
+                        if nonref:
+                            node.dont_dup = True
+                        else:
+                            nonref = True
             if not node.in_undirected_cycle():
                 # only allow duplication if node is part of a cycle were the graph undirected
                 node.dont_dup = True
@@ -119,10 +126,10 @@ class Graph:
             elif len(curr.steps) < num_edges * (2/3):
                 curr.generate(graphs)
         for opt in tree_opts:
-            opt.handle_lossy_edges(tree_opts)
-        for opt in tree_opts:
             for root in opt.root_nodes():
                 root.adjust_child_size()
+        for opt in tree_opts:
+            opt.handle_lossy_edges(tree_opts)
         Graph.scale_opt_scores(tree_opts)
         index = [[tree_opts[i].score, i] for i in range(len(tree_opts))]
         index.sort()
@@ -135,6 +142,8 @@ class Graph:
                     copy = self.copy_graph()
                     copy.edges[edge.id].make_ref(copy)
                     if copy.is_valid():
+                        for root in copy.root_nodes():
+                            root.adjust_child_size()
                         tree_opts.append(copy)
                         copy.handle_lossy_edges(tree_opts)
 
@@ -142,6 +151,8 @@ class Graph:
                     copy = copy.copy_graph()
                     copy.edges[edge.id].reverse(copy)
                     if copy.is_valid():
+                        for root in copy.root_nodes():
+                            root.adjust_child_size()
                         tree_opts.append(copy)
                         copy.handle_lossy_edges(tree_opts)
 
@@ -182,7 +193,7 @@ class Graph:
         orig_size = {}
         for node in self.nodes.values():
             orig_size[node.name] = node.orig_num_rows * node.rowsize
-            total_size[node.name] = total_size.get(node.name, 0) + node.data_size()
+            total_size[node.name] = total_size.get(node.name, 0) + node.distinct_rows * node.rowsize
 
         if table:
             return max(0, orig_size[table] - total_size[table])
@@ -239,7 +250,14 @@ class Graph:
         # having multiple refs to a node can create to same problem as duplicating it
         for node in self.nodes.values():
             if node.dont_dup and len(node.parent_edges) > 1:
-                return False
+                # don't actually count a recursive edge as a parent edge
+                nonrec = False
+                for edge in node.parent_edges:
+                    if edge.to_node != edge.from_node:
+                        if nonrec:
+                            return False
+                        else:
+                            nonrec = True
         return True
 
     def is_valid(self):
@@ -251,14 +269,6 @@ class Graph:
 
 
     def __str__(self):
-        # print('Data storage: %f' % self.scaled_data_storage)
-        # print('Data loss: %f' % self.scaled_data_loss)
-        # for node in self.nodes.values():
-        #     print(node.name)
-        #     print('Orig rows: %d' % node.orig_num_rows)
-        #     print('Num rows: %d' % node.num_rows)
-        # print('Refs: %f' % self.scaled_refs)
-        # print('Total: %f' % self.scaled_refs)
         return "\n".join(['------------------------------'] +
             [str(node) for node in self.nodes.values()] + ['=============================='])
 
@@ -323,10 +333,14 @@ class Node:
             if edge.reference:
                 continue
             elif edge.reversed:
-                edge.to_node.num_rows = self.num_rows - edge.null_fk_count
+                edge.to_node.num_rows = self.num_rows * (1 - (edge.null_fk_count / self.orig_num_rows))
+                edge.to_node.distinct_rows = ((self.distinct_rows / self.orig_num_rows) * edge.to_node.orig_num_rows * 
+                    (1 - (edge.null_fk_count / self.orig_num_rows)))
             else:
                 edge.to_node.num_rows = ((self.num_rows / self.orig_num_rows) * 
-                    (edge.to_node.num_rows - edge.null_fk_count))
+                    (edge.to_node.orig_num_rows - edge.null_fk_count))
+                edge.to_node.distinct_rows = ((self.distinct_rows / self.orig_num_rows) *
+                    (edge.to_node.orig_num_rows - edge.null_fk_count))
             edge.to_node.adjust_child_size()
 
 
@@ -435,8 +449,8 @@ class Edge:
     def reverse(self, graph):
         self.reversed = not self.reversed
         self.from_node.child_edges.remove(self)
-        self.from_node.parent_edges.add(self)
         self.to_node.parent_edges.remove(self)
+        self.from_node.parent_edges.add(self)
         self.to_node.child_edges.add(self)
         new_to_node = self.from_node
         self.from_node = self.to_node
