@@ -3,6 +3,15 @@ import pymysql.cursors
 import pymongo
 from schema_graph import *
 
+block_text = """  __  __                           __  __ _                 _             
+ |  \/  |                         |  \/  (_)               | |            
+ | \  / | ___  _ __   __ _  ___   | \  / |_  __ _ _ __ __ _| |_ ___  _ __ 
+ | |\/| |/ _ \| '_ \ / _` |/ _ \  | |\/| | |/ _` | '__/ _` | __/ _ \| '__|
+ | |  | | (_) | | | | (_| | (_) | | |  | | | (_| | | | (_| | || (_) | |   
+ |_|  |_|\___/|_| |_|\__, |\___/  |_|  |_|_|\__, |_|  \__,_|\__\___/|_|   
+                      __/ |                  __/ |                        
+                     |___/                  |___/                         """
+
 def migrate(args):
 
 	mysql_connection = pymysql.connect(host=args.mysql_host,
@@ -45,6 +54,7 @@ def view_schemas(start, end, opts):
 
 
 def main():
+	print(block_text)
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--mysql-host', default='localhost', help='MySQL database host')
 	parser.add_argument('--mysql-port', default=3306, type=int, help='MySQL database port')
