@@ -5,15 +5,11 @@ from bson.codec_options import CodecOptions
 from decimal import Decimal
 import datetime
 class DecimalCodec(TypeCodec):
-    python_type = Decimal    # the Python type acted upon by this type codec
-    bson_type = Decimal128   # the BSON type acted upon by this type codec
+    python_type = Decimal
+    bson_type = Decimal128
     def transform_python(self, value):
-        """Function that transforms a custom type value into a type
-        that BSON can encode."""
         return Decimal128(value)
     def transform_bson(self, value):
-        """Function that transforms a vanilla BSON type value into our
-        custom type."""
         return value.to_decimal()
 
 class DateCodec(TypeCodec):

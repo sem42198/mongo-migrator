@@ -1,10 +1,10 @@
-from schema import *
+from mongodb_schema import *
 from statistics import mean
 import copy
 
 data_storage_cost = 1
 data_loss_cost = 10
-ref_cost = 5
+ref_cost = 7
 
 TABLES_LIST_SQL = "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_TYPE != 'VIEW';"
 
@@ -133,7 +133,7 @@ class Graph:
         Graph.scale_opt_scores(tree_opts)
         index = [[tree_opts[i].score, i] for i in range(len(tree_opts))]
         index.sort()
-        return [tree_opts[i].make_schema() for _h, i in index]
+        return [tree_opts[i].make_mongodb_schema() for _h, i in index]
 
     def handle_lossy_edges(self, tree_opts):
         for root in self.root_nodes():
@@ -166,7 +166,7 @@ class Graph:
             edge.copy_edge(cp)
         return cp
 
-    def make_schema(self):
+    def make_mongodb_schema(self):
         schema = Schema(self)
         for node in self.root_nodes():
             schema.add_table(node.make_table())

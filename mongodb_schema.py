@@ -159,6 +159,8 @@ class ManyToOneRef(Ref):
 
     def update_value(self, record, db):
         fk = record[self.fk_column]
+        if not fk:
+            return
         child = db[self.child_name].find_one({self.child_key: fk})
         _id = child['_id']
         label = "%s_ref" % self.fk_column
