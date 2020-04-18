@@ -22,3 +22,9 @@ Schema options are each given a score and are presented to you with the best sco
 - Total data stored (duplication)
 
 To get a more detailed understaning of a schema, you can preview what it will look like as a JSON file.
+
+## Files and Structure
+
+- migrate.py serves as the entry point to the application.
+- schema_graph.py connects to the MySQL database and generates and ranks different schemas to map the database to MongoDB.
+- mongodb_schema.py is the representation of a MongoDB schema and performs the actual migration.
