@@ -2,26 +2,23 @@ from mongodb_schema import *
 from statistics import mean
 import copy
 
+# scale factors used when calculating schema scores
+# bigger means it is a more important consideration/ worse
 data_storage_cost = 1
 data_loss_cost = 10
 ref_cost = 7
 
 TABLES_LIST_SQL = "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_TYPE != 'VIEW';"
-
 PK_SQL = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s \
 AND COLUMN_KEY = 'PRI';"
-
 TABLE_SIZE_SQL = "SELECT DATA_LENGTH FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
-
 NUM_ROWS_SQL = "SELECT COUNT(*) AS NUM_ROWS FROM %s;"
-
 FKEYS_SQL = "SELECT COLUMN_NAME, REFERENCED_TABLE_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE \
 REFERENCED_TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
-
 DISTINCT_FK_COUNT_SQL = "SELECT COUNT(DISTINCT(%s)) DISTINCT_VALS FROM %s;"
-
 NULL_FK_COUNT = "SELECT COUNT(*) AS NULL_COUNT FROM %s WHERE %s IS NULL;"
 
+# a graph model used to convert a MySQL schema to a MongoDB schema
 class Graph:
 
     def __init__(self, connection, db_name, current_id=0, steps=[]):
@@ -34,10 +31,12 @@ class Graph:
         if current_id == 0:
             self.init_tables()
 
+    # we can keep track of the steps used to generate a graph
+    # useful for debugging
     def add_step(self, step):
         self.steps = self.steps + [step]
         
-
+    # initializes the graph where each table is a node and each foreign key is an edge
     def init_tables(self):
         nodes = {}
         with self.connection.cursor() as cursor:
@@ -65,7 +64,9 @@ class Graph:
                     null_fk_count = cursor.fetchone()['NULL_COUNT']
                     node.add_fkey(self, result['COLUMN_NAME'], refed_table, distinct_vals, null_fk_count)
 
-
+    # called when a graph is not a valid schema (either has a cycle or node with multiple parents)
+    # generates new graphs where each new graph has one thing changed
+    # hopefully one of the new graphs will be valid
     def generate(self, graphs):
         multiparent_node = self.get_multi_parent_node()
         if multiparent_node != None:
@@ -94,8 +95,7 @@ class Graph:
                 copy.edges[edge.id].make_ref(copy)
                 graphs.append(copy)
 
-
-
+    # generates and ranks the possible schema options for MySQL database
     def get_opts(self):
         # make any table with a fk pointing to itself a ref since there is no other option
         for edge in self.edges.values():
@@ -103,6 +103,7 @@ class Graph:
                 edge.make_ref(self)
 
         for node in self.nodes.values():
+            # nodes that start out with multiple parents shouldn't be duplicated
             if len(node.parent_edges) > 1:
                 # we make an exception for when it has a recursive edge but otherwise don't duplicate it
                 nonref = False
@@ -135,6 +136,8 @@ class Graph:
         index.sort()
         return [tree_opts[i].make_mongodb_schema() for _h, i in index]
 
+    # some edges may lose data
+    # the ones with a root node on one end can be converted to refs to avoid data loss
     def handle_lossy_edges(self, tree_opts):
         for root in self.root_nodes():
             for edge in root.child_edges:
@@ -147,7 +150,7 @@ class Graph:
                         tree_opts.append(copy)
                         copy.handle_lossy_edges(tree_opts)
 
-                    # now reverse the ref edge
+                    # now try reversing the ref edge
                     copy = copy.copy_graph()
                     copy.edges[edge.id].reverse(copy)
                     if copy.is_valid():
@@ -156,30 +159,23 @@ class Graph:
                         tree_opts.append(copy)
                         copy.handle_lossy_edges(tree_opts)
 
-
-
-    def copy_graph(self):
-        cp = Graph(self.connection, self.db_name, current_id=self.current_id, steps=self.steps)
-        for node in self.nodes.values():
-            node.copy_node(cp)
-        for edge in self.edges.values():
-            edge.copy_edge(cp)
-        return cp
-
+    # turns the graph into a mongodb schema
     def make_mongodb_schema(self):
         schema = Schema(self)
         for node in self.root_nodes():
-            schema.add_table(node.make_table())
+            schema.add_collection(node.make_collection())
         for node in self.nodes.values():
             node.add_refs(schema)
         return schema
 
+    # gets the root nodes (nodes with no parents) of the graph
     def root_nodes(self):
         roots = set()
         for node in self.nodes.values():
             if len(node.parent_edges) == 0:
                 roots.add(node)
             else:
+                # a node that has only ref parents can still be a root since refs aren't embedded
                 all_ref = True
                 for edge in node.parent_edges:
                     if not edge.reference:
@@ -188,6 +184,8 @@ class Graph:
                     roots.add(node)
         return roots
 
+    # approximates the amount of data lost with migration according to this graph
+    # optionally pass in a table name to get the amount of data lost from a particular table
     def data_loss_cost(self, table=None):
         total_size = {}
         orig_size = {}
@@ -200,9 +198,11 @@ class Graph:
         else:
             return sum([max(0, orig_size[table] - total_size[table]) for table in total_size.keys()])
 
+    # approximates the total amount of data that will be stored with migration according to this graph
     def data_storage_cost(self):
-        return sum([node.data_size() for node in self.nodes.values()])
+        return sum([node.rowsize * node.num_rows for node in self.nodes.values()])
 
+    # the number of ref edges the graph contains
     def ref_cost(self):
         num_refs = 0
         for edge in self.edges.values():
@@ -210,6 +210,7 @@ class Graph:
                 num_refs += 1
         return num_refs
 
+    # scales the scores for data loss, data storage, and refs based on average for all options
     def scale_opt_scores(schema_opts):
         data_loss = []
         data_storage = []
@@ -228,6 +229,7 @@ class Graph:
             graph.scaled_refs = ref_cost * refs[i] / average_refs
             graph.score = graph.scaled_data_loss + graph.scaled_data_storage + graph.scaled_refs
 
+    # returns a cycle if the graph contains one
     def get_cycle(self):
         tested = set()
         for node in self.nodes.values():
@@ -238,19 +240,22 @@ class Graph:
                 return cycle
         return None
 
+    # returns a node with multiple parents if the graph contains one
     def get_multi_parent_node(self):
         for node in self.nodes.values():
             if len(node.parent_edges) > 1:
                 for edge in node.parent_edges:
+                    # it is acceptable to have multiple parents only if all are refs
                     if not edge.reference:
                         return node
         return None
 
+    # nodes that shouldn't be duplicated shouldn't have more than one ref to them
     def refs_valid(self):
         # having multiple refs to a node can create to same problem as duplicating it
         for node in self.nodes.values():
             if node.dont_dup and len(node.parent_edges) > 1:
-                # don't actually count a recursive edge as a parent edge
+                # don't actually count a recursive edge as a ref
                 nonrec = False
                 for edge in node.parent_edges:
                     if edge.to_node != edge.from_node:
@@ -260,13 +265,25 @@ class Graph:
                             nonrec = True
         return True
 
+    # checks that a graph represents a valid MongoDB schema
     def is_valid(self):
         return self.get_cycle() == None and self.get_multi_parent_node() == None and self.refs_valid()
 
+    # returns the next available ID
+    # nodes and edges are assigned IDs that persist when the graph is copied
     def get_next_id(self):
         self.current_id += 1
         return self.current_id
 
+    # makes a deep copy of a graph
+    # need custom function since not all references get copied correctly otherwise
+    def copy_graph(self):
+        cp = Graph(self.connection, self.db_name, current_id=self.current_id, steps=self.steps)
+        for node in self.nodes.values():
+            node.copy_node(cp)
+        for edge in self.edges.values():
+            edge.copy_edge(cp)
+        return cp
 
     def __str__(self):
         return "\n".join(['------------------------------'] +
@@ -274,10 +291,7 @@ class Graph:
 
     __repr__ = __str__
 
-
-
-
-
+# a graph node representing a MySQL table or MongoDB record (including embeded)
 class Node:
 
     def __init__(self, graph, table, pk, rowsize, num_rows, node_id=None, dont_dup=False):
@@ -294,15 +308,18 @@ class Node:
         self.path = []
         graph.nodes[self.id] = self
 
+    # adds an edge representing a given foreign key with this node as the child/ to node
     def add_fkey(self, graph, fk_col, referenced_table, distinct_fk_count, null_fk_count):
         Edge(graph, referenced_table, self, fk_col, self.name, distinct_fk_count, null_fk_count)
 
-    def make_table(self):
+    # maps node to a mongodb collection 
+    def make_collection(self):
         self.path = [self.name]
-        table = Table(self.name, self.pk)
+        table = Collection(self.name, self.pk)
         self._embed_children(table)
         return table
 
+    # adds the node's children as nested records of mongodb collection
     def _embed_children(self, table):
         for edge in self.child_edges:
             node = edge.to_node
@@ -315,6 +332,7 @@ class Node:
             node.path = self.path + [label]
             node._embed_children(child)
 
+    # adds any references from this node to the mongodb schema
     def add_refs(self, schema):
         for edge in self.child_edges:
             if edge.reference:
@@ -325,9 +343,8 @@ class Node:
                     schema.add_one_to_many_ref(edge.to_node.name, edge.to_node.pk, edge.from_node.path, 
                         edge.from_node.pk, edge.fkey_col)
 
-    def data_size(self):
-        return self.rowsize * self.num_rows
-
+    # adjusts the number of rows and distinct rows a node will have in the mongodb model
+    # based on data being lost or getting duplicated
     def adjust_child_size(self):
         for edge in self.child_edges:
             if edge.reference:
@@ -343,22 +360,7 @@ class Node:
                     (edge.to_node.orig_num_rows - edge.null_fk_count))
             edge.to_node.adjust_child_size()
 
-
-    def __str__(self):
-        edges = []
-        for edge in self.child_edges:
-            name = edge.to_node.name
-            if edge.reference:
-                edges.append("(%s)" % name)
-            elif edge.reversed:
-                edges.append(name)
-            else:
-                edges.append("[%s]" % name)
-        children = ', '.join(edges)
-        return "%s -> {%s}" % (self.name, children)
-
-    __repr__ = __str__
-
+    # searches from this node for a cycle and returns cycle if found
     def cycle_search(self, tested, visited, path=[]):
         if self in visited:
             return path
@@ -372,9 +374,13 @@ class Node:
                         return cycle
             return None
 
+    # determines if node is part of an "undirected cycle"
+    # essentially that means, would the node be part of a cycle if all edge's directionality was ignored
+    # this turns out to be important to determining if a node should be duplicated
     def in_undirected_cycle(self):
         return self.undirected_search_for(self, [], set())
 
+    # DFS for a node ignoring the directionality of all edges
     def undirected_search_for(self, search_for, used_edges, visited_nodes):
         visited_nodes.add(self)
 
@@ -398,7 +404,9 @@ class Node:
                         return True
         return False
 
-
+    # duplicates a node that has multiple parents
+    # for each parent a new node will be created that has only one parent
+    # each of the duplicates will have the same children as the original node
     def duplicate(self, graph):
         graph.nodes.pop(self.id)
         for edge in self.child_edges:
@@ -415,14 +423,27 @@ class Node:
                 edge_copy.reference = edge.reference
         graph.add_step("Duplicated node: %s" % self.name)
 
+    # makes a copy of a node
+    # again, can't use existing deepcopy because references don't get copied right
     def copy_node(self, graph):
         Node(graph, self.name, self.pk, self.rowsize, self.num_rows, node_id=self.id, dont_dup=self.dont_dup)
 
+    def __str__(self):
+        edges = []
+        for edge in self.child_edges:
+            name = edge.to_node.name
+            if edge.reference:
+                edges.append("(%s)" % name)
+            elif edge.reversed:
+                edges.append(name)
+            else:
+                edges.append("[%s]" % name)
+        children = ', '.join(edges)
+        return "%s -> {%s}" % (self.name, children)
 
+    __repr__ = __str__
 
-
-
-
+# edge representing a foreign key in MySQL or an embedded record or reference in MongoDB
 class Edge:
 
     def __init__(self, graph, from_node, to_node, fkey_col, fkey_table, distinct_fk_count, null_fk_count, edge_id=None,
@@ -441,11 +462,9 @@ class Edge:
         self.id = (edge_id or graph.get_next_id())
         graph.edges[self.id] = self
 
-    def __str__(self):
-        return "(%s -> %s) via %s.%s" % (self.from_node.name, self.to_node.name, self.fkey_table, self.fkey_col)
-
-    __repr__ = __str__
-
+    # reverses the edge so the parent becomes the child and the child becomes the parent
+    # basically going from a one-to-many to a many-to-one relationship
+    # often causes data duplication, sometimes data loss so not always an ideal solution
     def reverse(self, graph):
         self.reversed = not self.reversed
         self.from_node.child_edges.remove(self)
@@ -457,15 +476,21 @@ class Edge:
         self.to_node = new_to_node
         graph.add_step("Reversed edge: %s" % self)
 
+    # converts an edge to a ref edge
+    # instead of an embedded record, there will be a reference to the child record
     def make_ref(self, graph):
         self.reference = True
         graph.add_step("Converted edge to ref: %s" % self)
 
+    # copies an edge
+    # build in deepcopy does not set up from nodes and to nodes correctly
     def copy_edge(self, graph):
         from_node = graph.nodes[self.from_node.id]
         to_node = graph.nodes[self.to_node.id]
         Edge(graph, from_node, to_node, self.fkey_col, self.fkey_table, self.distinct_fk_count, self.null_fk_count,
             edge_id=self.id, reversed=self.reversed, reference=self.reference)
 
+    def __str__(self):
+        return "(%s -> %s) via %s.%s" % (self.from_node.name, self.to_node.name, self.fkey_table, self.fkey_col)
 
-    
+    __repr__ = __str__

@@ -12,6 +12,7 @@ block_text = """  __  __                           __  __ _                 _
                       __/ |                  __/ |                        
                      |___/                  |___/                         """
 
+# function for choosing a schema and migrating data
 def migrate(args):
 
 	mysql_connection = pymysql.connect(host=args.mysql_host,
@@ -23,11 +24,11 @@ def migrate(args):
 
 	mongo_client = pymongo.MongoClient(args.mongodb_host, args.mongodb_port)
 
+	# model the MySQL scema as a graph and generate MongoDB schema options
 	graph = Graph(mysql_connection, args.database)
 	opts = graph.get_opts()
 
 	view_schemas(0, 5, opts)
-
 
 	if input('Would you like to migrate to MongoDB? (y/n) ').lower() == 'y':
 		schema = opts[int(input('Which schema would you like to use? ')) - 1]
@@ -36,7 +37,7 @@ def migrate(args):
 		finally:
 			mysql_connection.close()
 
-
+# display mongodb schema options for the user to choose from
 def view_schemas(start, end, opts):
 	for i in range(start, min(end, len(opts))):
 		opt = opts[i]
@@ -52,7 +53,6 @@ def view_schemas(start, end, opts):
 		filename = input('Enter name of preview file: ')
 		schema.preview(filename, num_records)
 
-
 def main():
 	print(block_text)
 	parser = argparse.ArgumentParser()
@@ -65,7 +65,6 @@ def main():
 	parser.add_argument('database', help='Name of the MySQL database (MongoDB databse name will match)')
 	args = parser.parse_args()
 	migrate(args)
-
 
 if __name__ == '__main__':
     main()

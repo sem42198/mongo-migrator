@@ -4,6 +4,7 @@ from bson.codec_options import TypeRegistry
 from bson.codec_options import CodecOptions
 from decimal import Decimal
 import datetime
+
 class DecimalCodec(TypeCodec):
     python_type = Decimal
     bson_type = Decimal128

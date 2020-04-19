@@ -1,32 +1,38 @@
 import simplejson as json
 import codec_options
 
+# represents a mongodb schema
 class Schema:
     def __init__(self, graph):
         self.connection = graph.connection
-        self.tables = []
+        self.collections = []
         self.refs = []
         self.graph = graph
 
-    def add_table(self, table):
-        self.tables.append(table)
+    # adds a collection to the schema
+    def add_collection(self, table):
+        self.collections.append(table)
 
+    # adds a many to one reference to the schema
     def add_many_to_one_ref(self, child_name, child_key, parent_path, parent_key, fk_column):
         self.refs.append(ManyToOneRef(child_name, child_key, parent_path, parent_key, fk_column))
 
+    # adds a one to many reference to the schema
     def add_one_to_many_ref(self, child_name, child_key, parent_path, parent_key, fk_column):
         self.refs.append(OneToManyRef(child_name, child_key, parent_path, parent_key, fk_column))
 
+    # maps data from MySQL database accordng to this schema and saves it to MongoDB
     def map(self, mongoclient):
         db = mongoclient[self.graph.db_name]
-        for table in self.tables:
+        for table in self.collections:
             table.map(self.connection, mongo_database=db)
         for ref in self.refs:
             ref.add_ref(db)
 
+    # maps a few records according to this schema and writes them to a JSON file
     def preview(self, file, num):
         results = {}
-        for table in self.tables:
+        for table in self.collections:
             results[table.table_name] = table.map(self.connection, preview=True, num=num)
         f = open(file, 'w')
         f.write(json.dumps(results, indent=4, default=str))
@@ -34,25 +40,28 @@ class Schema:
     def __str__(self):
         return str(self.graph)
 
-
-class Table:
+# represents a collection in MongoDB
+class Collection:
     def __init__(self, table_name, key):
         self.table_name = table_name
         self.key = key
         self.children = {}
 
+    # adds an embeded one to many child record to the collection
     def add_one_to_many_child(self, child_table, child_key, fk_column):
         child = OneToManyChild(child_table, child_key, fk_column)
         label = "%s_%s" % (fk_column, child_table)
         self.children[label] = child
         return child, label
 
+    # adds an embeded many to one (or one to one) child record to the collection
     def add_many_to_one_child(self, child_table, child_key, fk_column):
         child = ManyToOneChild(child_table, child_key, fk_column)
         label = fk_column
         self.children[label] = child
         return child, label
 
+    # maps data for this collection from MySQL db
     def map(self, connection, preview=False, num=None, mongo_database=None):
         with connection.cursor() as cursor:
             limit = ''
@@ -74,13 +83,16 @@ class Table:
         if preview:
             return results
 
-class Child(Table):
+# represents an embeded child record
+class Child(Collection):
     def __init__(self, table_name, key, fk_column):
         super().__init__(table_name, key)
         self.fk_column = fk_column
 
+# represents a one to many embeded child record
 class OneToManyChild(Child):
 
+    # maps data for this child record from MySQL db
     def map(self, connection, parent_record, parent_key):
         parent_id = parent_record[parent_key]
         with connection.cursor() as cursor:
@@ -93,8 +105,10 @@ class OneToManyChild(Child):
                     result[col] = self.children[col].map(connection, result, self.key)
             return results
 
+# represents a many to one embeded child record
 class ManyToOneChild(Child):
 
+    # maps data for this child record from MySQL db
     def map(self, connection, parent_record, parent_key):
         child_id = parent_record.pop(self.fk_column)
         with connection.cursor() as cursor:
@@ -105,6 +119,7 @@ class ManyToOneChild(Child):
                 result[label] = self.children[label].map(connection, result, self.key)
             return result
 
+# represents a reference in MongoDB
 class Ref():
     def __init__(self, child_name, child_key, parent_path, parent_key, fk_column):
         self.child_name = child_name
@@ -113,12 +128,14 @@ class Ref():
         self.parent_key = parent_key
         self.fk_column = fk_column
 
+    # adds appropriate reference to all applicable records
     def do_update(self, db):
         collection = db[self.parent_path[0]]
         for record in collection.find():
             self.find_parents(record, self.parent_path[1:], db)
             collection.replace_one({'_id': record['_id']}, record)
 
+    # finds the records (may be nested) that should have a reference added
     def find_parents(self, record, path, db):
         if len(path) == 0:
             if type(record) is list:
@@ -135,10 +152,12 @@ class Ref():
             else:
                 self.find_parents(new_recs, new_path, db)
 
-
-
+# represents a one to many reference in MongoDB
 class OneToManyRef(Ref):
+
+    # adds the reference to records in MongoDB
     def add_ref(self, db):
+        # first map referenced record ids to the key values of the records that should reference them
         self.children = {}
         for child in db[self.child_name].find():
             fk = child[self.fk_column]
@@ -148,15 +167,20 @@ class OneToManyRef(Ref):
 
         self.do_update(db)
 
+    # adds reference to a single (oftentimes nested) record
     def update_value(self, record, db):
         label = "%s_%s_ref" % (self.fk_column ,self.child_name)
         key = record[self.parent_key]
         record[label] = self.children.get(key, [])
 
+# represents a many to one reference in MongoDB
 class ManyToOneRef(Ref):
+
+    # adds the reference to records in MongoDB
     def add_ref(self, db):
         self.do_update(db)
 
+    # adds reference to a single (oftentimes nested) record
     def update_value(self, record, db):
         fk = record[self.fk_column]
         if not fk:
