@@ -15,7 +15,6 @@ TABLE_SIZE_SQL = "SELECT DATA_LENGTH FROM information_schema.tables WHERE TABLE_
 NUM_ROWS_SQL = "SELECT COUNT(*) AS NUM_ROWS FROM %s;"
 FKEYS_SQL = "SELECT COLUMN_NAME, REFERENCED_TABLE_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE \
 REFERENCED_TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
-DISTINCT_FK_COUNT_SQL = "SELECT COUNT(DISTINCT(%s)) DISTINCT_VALS FROM %s;"
 NULL_FK_COUNT = "SELECT COUNT(*) AS NULL_COUNT FROM %s WHERE %s IS NULL;"
 
 # a graph model used to convert a MySQL schema to a MongoDB schema
@@ -57,12 +56,10 @@ class Graph:
                 node = nodes[table]
                 cursor.execute(FKEYS_SQL, (self.db_name, table))
                 for result in cursor.fetchall():
-                    cursor.execute(DISTINCT_FK_COUNT_SQL % (result['COLUMN_NAME'], table))
-                    distinct_vals = cursor.fetchone()['DISTINCT_VALS']
                     refed_table = nodes[result['REFERENCED_TABLE_NAME']]
                     cursor.execute(NULL_FK_COUNT % (table, result['COLUMN_NAME']))
                     null_fk_count = cursor.fetchone()['NULL_COUNT']
-                    node.add_fkey(self, result['COLUMN_NAME'], refed_table, distinct_vals, null_fk_count)
+                    node.add_fkey(self, result['COLUMN_NAME'], refed_table, null_fk_count)
 
     # called when a graph is not a valid schema (either has a cycle or node with multiple parents)
     # generates new graphs where each new graph has one thing changed
@@ -309,8 +306,8 @@ class Node:
         graph.nodes[self.id] = self
 
     # adds an edge representing a given foreign key with this node as the child/ to node
-    def add_fkey(self, graph, fk_col, referenced_table, distinct_fk_count, null_fk_count):
-        Edge(graph, referenced_table, self, fk_col, self.name, distinct_fk_count, null_fk_count)
+    def add_fkey(self, graph, fk_col, referenced_table, null_fk_count):
+        Edge(graph, referenced_table, self, fk_col, self.name, null_fk_count)
 
     # maps node to a mongodb collection 
     def make_collection(self):
@@ -419,8 +416,7 @@ class Node:
             edge.to_node = copy
             copy.parent_edges.add(edge)
             for edge in self.child_edges:
-                edge_copy = Edge(graph, copy, edge.to_node, edge.fkey_col, edge.fkey_table, edge.distinct_fk_count, 
-                    edge.null_fk_count)
+                edge_copy = Edge(graph, copy, edge.to_node, edge.fkey_col, edge.fkey_table, edge.null_fk_count)
                 edge_copy.reversed = edge.reversed
                 edge_copy.reference = edge.reference
         graph.add_step("Duplicated node: %s" % self.name)
@@ -448,14 +444,13 @@ class Node:
 # edge representing a foreign key in MySQL or an embedded record or reference in MongoDB
 class Edge:
 
-    def __init__(self, graph, from_node, to_node, fkey_col, fkey_table, distinct_fk_count, null_fk_count, edge_id=None,
-        reversed=False, reference=False):
+    def __init__(self, graph, from_node, to_node, fkey_col, fkey_table, null_fk_count, edge_id=None, reversed=False, 
+        reference=False):
 
         self.from_node = from_node
         self.to_node = to_node
         self.fkey_col = fkey_col
         self.fkey_table = fkey_table
-        self.distinct_fk_count = distinct_fk_count
         self.null_fk_count = null_fk_count
         self.reversed = reversed
         self.reference = reference
@@ -489,8 +484,8 @@ class Edge:
     def copy_edge(self, graph):
         from_node = graph.nodes[self.from_node.id]
         to_node = graph.nodes[self.to_node.id]
-        Edge(graph, from_node, to_node, self.fkey_col, self.fkey_table, self.distinct_fk_count, self.null_fk_count,
-            edge_id=self.id, reversed=self.reversed, reference=self.reference)
+        Edge(graph, from_node, to_node, self.fkey_col, self.fkey_table, self.null_fk_count, edge_id=self.id, 
+            reversed=self.reversed, reference=self.reference)
 
     def __str__(self):
         return "(%s -> %s) via %s.%s" % (self.from_node.name, self.to_node.name, self.fkey_table, self.fkey_col)
