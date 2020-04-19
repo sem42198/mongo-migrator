@@ -348,11 +348,13 @@ class Node:
     def adjust_child_size(self):
         for edge in self.child_edges:
             if edge.reference:
+                edge.to_node.num_rows = edge.to_node.orig_num_rows
+                edge.to_node.distinct_rows = edge.to_node.distinct_rows
                 continue
             elif edge.reversed:
                 edge.to_node.num_rows = self.num_rows * (1 - (edge.null_fk_count / self.orig_num_rows))
-                edge.to_node.distinct_rows = ((self.distinct_rows / self.orig_num_rows) * edge.to_node.orig_num_rows * 
-                    (1 - (edge.null_fk_count / self.orig_num_rows)))
+                edge.to_node.distinct_rows = min(self.distinct_rows * (1 - (edge.null_fk_count / self.orig_num_rows)),
+                    edge.to_node.orig_num_rows)
             else:
                 edge.to_node.num_rows = ((self.num_rows / self.orig_num_rows) * 
                     (edge.to_node.orig_num_rows - edge.null_fk_count))
