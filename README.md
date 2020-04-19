@@ -25,6 +25,6 @@ To get a more detailed understaning of a schema, you can preview what it will lo
 
 ## Files and Structure
 
-- migrate.py serves as the entry point to the application.
+- mongo_migrator.py serves as the entry point to the application.
 - schema_graph.py connects to the MySQL database and generates and ranks different schemas to map the database to MongoDB.
 - mongodb_schema.py is the representation of a MongoDB schema and performs the actual migration.
