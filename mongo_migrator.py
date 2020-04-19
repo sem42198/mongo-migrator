@@ -52,6 +52,7 @@ def view_schemas(start, end, opts):
 		num_records = int(input('How many records would you like to preview? '))
 		filename = input('Enter name of preview file: ')
 		schema.preview(filename, num_records)
+		print('Preview generated at %s' % filename)
 
 def main():
 	print(block_text)
