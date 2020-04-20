@@ -12,10 +12,10 @@ TABLES_LIST_SQL = "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_
 PK_SQL = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s \
 AND COLUMN_KEY = 'PRI';"
 TABLE_SIZE_SQL = "SELECT DATA_LENGTH FROM information_schema.tables WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
-NUM_ROWS_SQL = "SELECT COUNT(*) AS NUM_ROWS FROM %s;"
+NUM_ROWS_SQL = "SELECT COUNT(*) AS NUM_ROWS FROM `%s`;"
 FKEYS_SQL = "SELECT COLUMN_NAME, REFERENCED_TABLE_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE \
 REFERENCED_TABLE_SCHEMA = %s AND TABLE_NAME = %s;"
-NULL_FK_COUNT = "SELECT COUNT(*) AS NULL_COUNT FROM %s WHERE %s IS NULL;"
+NULL_FK_COUNT = "SELECT COUNT(*) AS NULL_COUNT FROM `%s` WHERE `%s` IS NULL;"
 
 # a graph model used to convert a MySQL schema to a MongoDB schema
 class Graph:
@@ -49,7 +49,7 @@ class Graph:
                 tbl_size = cursor.fetchone()['DATA_LENGTH']
                 cursor.execute(NUM_ROWS_SQL % table)
                 num_rows = cursor.fetchone()['NUM_ROWS']
-                rowsize = (tbl_size or num_rows * 32) / num_rows
+                rowsize = (tbl_size or num_rows * 32) / max(num_rows, 1e-9)
                 nodes[table] = Node(self, table, pk, rowsize, num_rows)
             for result in tables:
                 table = result['TABLE_NAME']
