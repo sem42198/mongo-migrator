@@ -34,6 +34,7 @@ def migrate(args):
 		schema = opts[int(input('Which schema would you like to use? ')) - 1]
 		try:
 			schema.map(mongo_client)
+			print('Migration complete')
 		finally:
 			mysql_connection.close()
 
