@@ -50,7 +50,7 @@ Schema options are each given a score and are presented to you with the best sco
 - Number of references
 - Total data stored (duplication)
 
-To get a more detailed understaning of a schema, you can preview what it will look like as a JSON file.
+To get a more detailed understanding of a schema, you can preview what it will look like as a JSON file.
 
 ## Files and Structure
 
