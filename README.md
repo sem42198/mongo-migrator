@@ -34,7 +34,7 @@ MongoMigrator is a tool for automatically migrating a MySQL database to MongoDB.
 
 - You can then respond to prompts in order to view and preview schemas as well as migrate to MongoDB.
 - When prompted to select which schema you wish to preview/migrate enter the number of the schema you wish to use. The schema number is an integer value listed before each schema option. All other prompts you should respond with 'y' or 'n' for yes or no respectively.
-- The name of the resulting MongoDB database will be match the MySQL database.
+- The name of the resulting MongoDB database will match the MySQL database.
 
 ## Schema Options
 
